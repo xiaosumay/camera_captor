@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QApplication>
 #include <QtConcurrent>
+#include <QThreadPool>
 
 QT_CHARTS_USE_NAMESPACE
 
@@ -20,24 +21,36 @@ DataSource::DataSource(QObject *parent)
     : QIODevice(parent)
     , m_channels(1)
     , m_id(0)
+    , m_running(true)
 {
-    qRegisterMetaType<QAbstractSeries*>();
+    qRegisterMetaType<QAbstractSeries *>();
     qRegisterMetaType<QAbstractAxis *>();
 
-    g_pool.setMaxThreadCount(4);
+    g_pool.setMaxThreadCount(1);
 }
 
+DataSource::~DataSource()
+{
+    waitForFinished();
+}
 
-qint64 DataSource::readData(char * data, qint64 maxSize)
+qint64 DataSource::readData(char *data, qint64 maxSize)
 {
     Q_UNUSED(data)
     Q_UNUSED(maxSize)
     return -1;
 }
 
-
-qint64 DataSource::writeData(const char * data, qint64 maxSize)
+qint64 DataSource::writeData(const char *data, qint64 maxSize)
 {
+#if 0
+    static qint64 lasttime = QDateTime::currentMSecsSinceEpoch();
+    auto curtime = QDateTime::currentMSecsSinceEpoch();
+
+    qDebug() << "speed: " << (curtime - lasttime);
+    lasttime = curtime;
+#endif
+
     emit capture();
 
     if (m_series) {
@@ -76,9 +89,48 @@ qint64 DataSource::writeData(const char * data, qint64 maxSize)
         emit audioAvailable(buff);
     }
 
-    if (m_audio) m_audio->write(data, maxSize);
+    if (m_audio) {
+        m_audio->write(QByteArray(data, maxSize));
+        m_audio->flush();
+    }
 
     return maxSize;
+}
+
+static bool isEmpty(QList<std::tuple<int, QString, QImage>> &imageQueue, QMutex &imageQueueMutex)
+{
+    bool empty = true;
+    {
+        QMutexLocker l(&imageQueueMutex);
+        empty = imageQueue.isEmpty();
+    }
+
+    return empty;
+}
+
+void DataSource::runnThread()
+{
+    std::tuple<int, QString, QImage> image;
+
+    while (m_running) {
+        {
+            QMutexLocker l(&imageQueueMutex);
+            if (!imageQueue.isEmpty()) {
+                image = imageQueue.takeFirst();
+            } else {
+                QThread::msleep(40);
+                continue;
+            }
+        }
+
+        int ret = 0;
+        do {
+            ret = std::get<2>(image).save(QString("%1/image-%2.jpg")
+                                              .arg(std::get<1>(image))
+                                              .arg(std::get<0>(image), 8, 10, QChar('0')));
+
+        } while (ret == 0);
+    }
 }
 
 void DataSource::setSeries(QAbstractSeries *series)
@@ -91,9 +143,28 @@ void DataSource::setChannelCount(int count)
     m_channels = count;
     m_id = 0;
     m_name = QApplication::applicationDirPath() + "/" + QDateTime::currentDateTime().toString("yy-MM-dd-HH-mm-ss");
+    m_running = true;
 
     QDir().mkpath(m_name);
 
     m_audio.reset(new QFile(QStringLiteral("%1/audio-%2.pcm").arg(m_name).arg(m_channels)));
-    m_audio->open(QIODevice::WriteOnly | QIODevice::Append);
+    m_audio->open(QIODevice::WriteOnly | QIODevice::Truncate);
+
+    QtConcurrent::run(&g_pool, this, &DataSource::runnThread);
+}
+
+void DataSource::onImageAvailable(const QImage &img)
+{
+    {
+        QMutexLocker l(&imageQueueMutex);
+        imageQueue << std::make_tuple(m_id++, m_name, img);
+    }
+}
+
+void DataSource::waitForFinished()
+{
+    while (!isEmpty(imageQueue, imageQueueMutex)) { QThread::msleep(40); }
+
+    m_running = false;
+    g_pool.waitForDone();
 }

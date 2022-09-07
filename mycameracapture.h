@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QAbstractVideoSurface>
 #include <QMutex>
+#include <QQueue>
 
 class MyCameraCapture : public QAbstractVideoSurface
 {
@@ -11,14 +12,14 @@ class MyCameraCapture : public QAbstractVideoSurface
 public:
     MyCameraCapture(QLabel *widget, QObject *parent = nullptr);
 
-    QImage getImage() const;
+    QImage getImage();
 
 public:
     QList<QVideoFrame::PixelFormat> supportedPixelFormats(QAbstractVideoBuffer::HandleType type) const;
     bool present(const QVideoFrame &frame);
 
 private:
-    QImage m_image;
+    QQueue<QImage> m_image;
     QMutex mutable m_locker;
     QLabel *m_label;
 };

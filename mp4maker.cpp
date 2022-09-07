@@ -13,7 +13,6 @@ extern "C" {
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 #include <libavutil/opt.h>
-
 #ifdef __cplusplus
 }
 #endif
@@ -85,6 +84,8 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
         return false;
     }
 
+    pVideoCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
+
     // 比特率、宽度、高度
     pVideoCodecCtx->width = size.width();   // 视频宽度
     pVideoCodecCtx->height = size.height(); // 视频高度
@@ -92,7 +93,7 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
     pVideoCodecCtx->time_base = {1, 25};
     pVideoCodecCtx->framerate = {25, 1};
     // 关键帧间隔
-    pVideoCodecCtx->gop_size = 10;
+    pVideoCodecCtx->gop_size = 0;
     // 不使用b帧
     pVideoCodecCtx->max_b_frames = 0;
     // 帧、编码格式
@@ -151,7 +152,7 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
         return false;
     }
 
-#if 0
+#if defined(MAKE_AUDIO)
     // 创建音频编码器，指定类型为AAC
     const AVCodec *acodec = avcodec_find_encoder(AVCodecID::AV_CODEC_ID_AAC);
     if (!acodec) {
@@ -173,12 +174,17 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
     pAudioCodecCtx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
 #endif
 
+    pAudioCodecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
+
     pAudioCodecCtx->sample_rate = 16000;
     pAudioCodecCtx->sample_fmt = AVSampleFormat::AV_SAMPLE_FMT_FLTP;
     pAudioCodecCtx->channels = 1;
     // 根据音频通道数自动选择输出类型
     pAudioCodecCtx->channel_layout = av_get_default_channel_layout(pAudioCodecCtx->channels);
     pAudioCodecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+
+    pAudioCodecCtx->time_base = {1, 64};
+    pAudioCodecCtx->framerate = {64, 1};
 
     // 打开编码器
     errnum = avcodec_open2(pAudioCodecCtx, acodec, NULL);
@@ -249,7 +255,7 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
 
 void Mp4Maker::addAudio(QByteArray audio)
 {
-#if 0
+#if defined(MAKE_AUDIO)
     if (!m_unit_started) return;
 
     int errnum = 0;
@@ -277,6 +283,7 @@ void Mp4Maker::addAudio(QByteArray audio)
         return;
     }
 
+    aframe->pts = apts++;
     // 音频编码
     errnum = avcodec_send_frame(pAudioCodecCtx, aframe);
     if (errnum < 0) {
@@ -285,36 +292,43 @@ void Mp4Maker::addAudio(QByteArray audio)
         return;
     }
 
-    // 音频编码报文
-    AVPacket *apkt = av_packet_alloc();
-    av_init_packet(apkt);
+    while (true) {
+        // 音频编码报文
+        AVPacket *apkt = av_packet_alloc();
+        av_init_packet(apkt);
 
-    errnum = avcodec_receive_packet(pAudioCodecCtx, apkt);
-    if (errnum < 0) {
-        av_packet_free(&apkt);
-        av_strerror(errnum, errbuf, sizeof(errbuf));
-        qDebug() << "avcodec_receive_packet failed " << errbuf;
-        return;
-    }
-    apkt->stream_index = pAudioStream->index;
-    apkt->pts = AV_NOPTS_VALUE;
-    apkt->dts = AV_NOPTS_VALUE;
+        errnum = avcodec_receive_packet(pAudioCodecCtx, apkt);
+        if (errnum < 0) {
+            av_packet_free(&apkt);
+            av_strerror(errnum, errbuf, sizeof(errbuf));
+            return;
+        }
 
-    // 写音频帧
-    errnum = av_interleaved_write_frame(pFormatCtx, apkt);
-    if (errnum < 0) {
-        av_strerror(errnum, errbuf, sizeof(errbuf));
-        qDebug() << "av_interleaved_write_frame failed " << errbuf;
-        return;
+        // 转换pts
+        av_packet_rescale_ts(apkt, pAudioCodecCtx->time_base, pAudioStream->time_base);
+        apkt->stream_index = pAudioStream->index;
+
+        qDebug() << "apkt->pts: " << apkt->pts;
+
+        // 写音频帧
+        errnum = av_interleaved_write_frame(pFormatCtx, apkt);
+        if (errnum < 0) {
+            av_strerror(errnum, errbuf, sizeof(errbuf));
+            qDebug() << "av_interleaved_write_frame failed " << errbuf;
+            return;
+        }
     }
 #endif
 }
 
 void Mp4Maker::addImage(const QImage &img)
 {
+    qDebug() << "m_unit_started " << m_unit_started;
+
     if (!m_unit_started) return;
 
     char errbuf[1024] = {0};
+    int errnum = 0;
 
     // 视频编码
     const uchar *rgb = img.bits();
@@ -324,6 +338,7 @@ void Mp4Maker::addImage(const QImage &img)
     srcSlice[0] = (uint8_t *) rgb;
     int srcStride[AV_NUM_DATA_POINTERS] = {0};
     srcStride[0] = img.width() * 4;
+
     // 转换
     int h = sws_scale(pSwsCtx, srcSlice, srcStride, 0, img.height(), vframe->data, vframe->linesize);
     if (h < 0) {
@@ -333,32 +348,40 @@ void Mp4Maker::addImage(const QImage &img)
 
     // pts递增
     vframe->pts = vpts++;
-    auto errnum = avcodec_send_frame(pVideoCodecCtx, vframe);
+
+    errnum = avcodec_send_frame(pVideoCodecCtx, vframe);
     if (errnum < 0) {
-        qDebug() << "image: avcodec_send_frame failed";
-        return;
-    }
-
-    // 视频编码报文
-    AVPacket *vpkt = av_packet_alloc();
-    av_init_packet(vpkt);
-
-    errnum = avcodec_receive_packet(pVideoCodecCtx, vpkt);
-    if (errnum < 0 || vpkt->size <= 0) {
-        av_packet_free(&vpkt);
         av_strerror(errnum, errbuf, sizeof(errbuf));
-        qDebug() << "image: avcodec_receive_packet failed " << errbuf;
+        qDebug() << "image: avcodec_send_frame failed " << errbuf;
         return;
     }
 
-    // 转换pts
-    av_packet_rescale_ts(vpkt, pVideoCodecCtx->time_base, pVideoStream->time_base);
-    vpkt->stream_index = pVideoStream->index;
+    while (true) {
+        // 视频编码报文
+        AVPacket *vpkt = av_packet_alloc();
+        av_init_packet(vpkt);
 
-    // 向封装器中写入压缩报文，该函数会自动释放pkt空间，不需要调用者手动释放
-    errnum = av_interleaved_write_frame(pFormatCtx, vpkt);
-    if (errnum < 0) {
-        qDebug() << "image: av_interleaved_write_frame failed";
-        return;
+        errnum = avcodec_receive_packet(pVideoCodecCtx, vpkt);
+        if (errnum < 0 || vpkt->size <= 0) {
+            av_packet_free(&vpkt);
+            av_strerror(errnum, errbuf, sizeof(errbuf));
+
+            qDebug() << "image: avcodec_receive_packet failed! " << errbuf;
+            return;
+        }
+
+        // 转换pts
+        av_packet_rescale_ts(vpkt, pVideoCodecCtx->time_base, pVideoStream->time_base);
+        vpkt->stream_index = pVideoStream->index;
+
+        // 向封装器中写入压缩报文，该函数会自动释放pkt空间，不需要调用者手动释放
+        errnum = av_interleaved_write_frame(pFormatCtx, vpkt);
+        if (errnum < 0) {
+            av_packet_free(&vpkt);
+            av_strerror(errnum, errbuf, sizeof(errbuf));
+
+            qDebug() << "image: av_interleaved_write_frame failed " << errbuf;
+            return;
+        }
     }
 }

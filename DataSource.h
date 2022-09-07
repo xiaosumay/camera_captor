@@ -8,6 +8,9 @@
 #include <QVideoFrame>
 #include <atomic>
 #include <QFile>
+#include <QMutex>
+
+#include <tuple>
 
 QT_BEGIN_NAMESPACE
 class QQuickView;
@@ -20,6 +23,8 @@ class DataSource : public QIODevice
     Q_OBJECT
 public:
     explicit DataSource(QObject *parent = 0);
+    ~DataSource();
+
     void setSeries(QAbstractSeries *series);
 
     void setChannelCount(int count);
@@ -27,6 +32,7 @@ public:
 
 public:
     void onImageAvailable(const QImage &img);
+    void waitForFinished();
 
 signals:
     void capture();
@@ -34,7 +40,10 @@ signals:
 
 protected:
     qint64 readData(char *data, qint64 maxSize);
-    qint64 writeData(const char * data, qint64 maxSize);
+    qint64 writeData(const char *data, qint64 maxSize);
+
+private:
+    void runnThread();
 
 private:
     QXYSeries *m_series;
@@ -42,6 +51,10 @@ private:
     QString m_name;
     std::atomic_uint64_t m_id;
     QScopedPointer<QFile> m_audio;
+
+    QList<std::tuple<int, QString, QImage>> imageQueue;
+    QMutex imageQueueMutex;
+    std::atomic_bool m_running;
 };
 
 

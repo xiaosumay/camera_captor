@@ -1,4 +1,4 @@
-QT       += core gui multimedia multimediawidgets charts concurrent
+QT       += core gui multimedia multimediawidgets charts concurrent multimedia-private
 
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 
@@ -16,6 +16,8 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 FFMPEG_ROOT = $$PWD/ffmpeg-n4.4-latest-win64-gpl-shared-4.4
+
+#DEFINES += MAKE_VIDEO=1
 
 INCLUDEPATH += $$FFMPEG_ROOT/include
 LIBS += -L$$FFMPEG_ROOT/lib -lavutil -lavformat -lavcodec -lavdevice -lavfilter -lswresample -lswscale -lpostproc

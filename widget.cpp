@@ -14,10 +14,11 @@
 #include "mycameracapture.h"
 
 #include "mp4maker.h"
+#include "AudioQueue.h"
 
 Q_DECLARE_METATYPE(QCameraInfo)
 
-QThreadPool g_pool;
+static BufferUnits bufferUnits;
 
 Widget::Widget(QWidget *parent)
     : QWidget(parent)
@@ -27,7 +28,7 @@ Widget::Widget(QWidget *parent)
 {
     ui->setupUi(this);
 
-    g_pool.setMaxThreadCount(1);
+    reset_buffer(&bufferUnits);
 
     const QList<QCameraInfo> availableCameras = QCameraInfo::availableCameras();
     for (const QCameraInfo &cameraInfo : availableCameras) {
@@ -74,7 +75,13 @@ Widget::~Widget()
     delete ui;
 }
 
-void Widget::onCapture() {}
+void Widget::onCapture()
+{
+#if !defined(MAKE_VIDEO)
+    QImage img = viewfinder->getImage();
+    dataSource->onImageAvailable(img);
+#endif
+}
 
 void Widget::onAudioAvailable(QByteArray audio)
 {
@@ -82,12 +89,29 @@ void Widget::onAudioAvailable(QByteArray audio)
 
     QImage img = viewfinder->getImage();
     m_mp4Maker->addImage(img);
+
+#if defined(MAKE_AUDIO)
+    static QByteArray block(g_buff_size, '\0');
+    int actual = 0;
+
+    write_loop_data(&bufferUnits, audio.data(), audio.size());
+    while (read_loop_data(&bufferUnits, block.data(), block.size(), &actual) != -1) {
+        //
+        m_mp4Maker->addAudio(block);
+    }
+#endif
 }
 
 void Widget::onAudioInfoChanged(int idx)
 {
-    const QVariant info = ui->audioList->itemData(idx);
-    qDebug() << "audio info: " << info.value<QAudioDeviceInfo>().deviceName();
+    const QAudioDeviceInfo &info = ui->audioList->itemData(idx).value<QAudioDeviceInfo>();
+
+    qDebug() << "audio info: " << info.deviceName();
+
+    ui->channelList->clear();
+    foreach (auto item, info.supportedChannelCounts()) {
+        ui->channelList->addItem(QString::number(item));
+    }
 }
 
 void Widget::onCameraInfoChanged(int idx)
@@ -129,11 +153,11 @@ void Widget::setCamera(const QCameraInfo &cameraInfo)
 
 void Widget::setAudio(const QAudioDeviceInfo &audioInfo)
 {
-    bool isUsbAudio = audioInfo.deviceName().contains(QStringLiteral("Source/Sink"));
+    int channels = ui->channelList->currentText().toInt();
 
     QAudioFormat formatAudio;
     formatAudio.setSampleRate(16000);
-    formatAudio.setChannelCount(isUsbAudio ? 8 : 1);
+    formatAudio.setChannelCount(channels);
     formatAudio.setSampleSize(16);
     formatAudio.setCodec("audio/pcm");
     formatAudio.setByteOrder(QAudioFormat::LittleEndian);
@@ -153,6 +177,7 @@ void Widget::on_start_record_clicked()
 {
     ui->audioList->setEnabled(false);
     ui->camraList->setEnabled(false);
+    ui->channelList->setEnabled(false);
     ui->start_record->setEnabled(false);
 
     auto audioinfo = ui->audioList->currentData();
@@ -161,9 +186,14 @@ void Widget::on_start_record_clicked()
     auto videoInfo = ui->cameraInfo->currentData();
     QCameraViewfinderSettings vs = videoInfo.value<QCameraViewfinderSettings>();
 
+#if defined(MAKE_VIDEO)
+
+    qDebug() << "MAKE_VIDEO";
+
     m_mp4Maker.reset(new Mp4Maker());
 
     m_mp4Maker->init(vs.resolution(), dataSource->getPath() + "/video.mp4");
+#endif
 
     m_audioInput->start(dataSource);
 }
@@ -172,6 +202,7 @@ void Widget::on_stop_record_clicked()
 {
     if (m_audioInput) {
         ui->audioList->setEnabled(true);
+        ui->channelList->setEnabled(true);
         ui->camraList->setEnabled(true);
 
         ui->start_record->setEnabled(true);
@@ -179,5 +210,7 @@ void Widget::on_stop_record_clicked()
         m_audioInput->stop();
 
         m_mp4Maker.reset(Q_NULLPTR);
+
+        dataSource->waitForFinished();
     }
 }
