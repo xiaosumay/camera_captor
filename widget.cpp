@@ -14,35 +14,40 @@
 #include "mycameracapture.h"
 
 #include "mp4maker.h"
+
+#if defined(MAKE_AUDIO)
 #include "AudioQueue.h"
+static BufferUnits bufferUnits;
+#endif
 
 Q_DECLARE_METATYPE(QCameraInfo)
 
-static BufferUnits bufferUnits;
-
 Widget::Widget(QWidget *parent)
-    : QWidget(parent)
-    , ui(new Ui::Widget)
-    , m_audioInput(Q_NULLPTR)
-    , m_mp4Maker(Q_NULLPTR)
+    : QWidget(parent), ui(new Ui::Widget), m_audioInput(Q_NULLPTR), m_mp4Maker(Q_NULLPTR)
 {
     ui->setupUi(this);
 
+#if defined(MAKE_AUDIO)
     reset_buffer(&bufferUnits);
+#endif
 
     const QList<QCameraInfo> availableCameras = QCameraInfo::availableCameras();
     for (const QCameraInfo &cameraInfo : availableCameras) {
         ui->camraList->addItem(cameraInfo.description(), QVariant::fromValue(cameraInfo));
     }
 
-    const QList<QAudioDeviceInfo> availableAudios = QAudioDeviceInfo::availableDevices(QAudio::AudioInput);
+    const QList<QAudioDeviceInfo> availableAudios = QAudioDeviceInfo::availableDevices(
+        QAudio::AudioInput);
     for (const QAudioDeviceInfo &audioInfo : availableAudios) {
         ui->audioList->addItem(audioInfo.deviceName(), QVariant::fromValue(audioInfo));
     }
 
-    connect(ui->camraList, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &Widget::onCameraInfoChanged);
-    connect(ui->audioList, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &Widget::onAudioInfoChanged);
-    connect(ui->cameraInfo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &Widget::onCameraSettingChanged);
+    connect(ui->camraList, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &Widget::onCameraInfoChanged);
+    connect(ui->audioList, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &Widget::onAudioInfoChanged);
+    connect(ui->cameraInfo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            &Widget::onCameraSettingChanged);
 
     viewfinder = new MyCameraCapture(ui->cameraView, this);
 
@@ -85,18 +90,18 @@ void Widget::onCapture()
 
 void Widget::onAudioAvailable(QByteArray audio)
 {
-    if (!m_mp4Maker) return;
+    if (!m_mp4Maker)
+        return;
 
     QImage img = viewfinder->getImage();
     m_mp4Maker->addImage(img);
 
 #if defined(MAKE_AUDIO)
-    static QByteArray block(g_buff_size, '\0');
+    static QByteArray block(2048, '\0');
     int actual = 0;
 
     write_loop_data(&bufferUnits, audio.data(), audio.size());
     while (read_loop_data(&bufferUnits, block.data(), block.size(), &actual) != -1) {
-        //
         m_mp4Maker->addAudio(block);
     }
 #endif
@@ -126,7 +131,8 @@ void Widget::onCameraSettingChanged(int idx)
 {
     const QVariant info = ui->cameraInfo->itemData(idx);
     //设置摄像头参数
-    if (m_camera) m_camera->setViewfinderSettings(info.value<QCameraViewfinderSettings>());
+    if (m_camera)
+        m_camera->setViewfinderSettings(info.value<QCameraViewfinderSettings>());
 }
 
 void Widget::setCamera(const QCameraInfo &cameraInfo)
@@ -139,7 +145,8 @@ void Widget::setCamera(const QCameraInfo &cameraInfo)
 
     ui->cameraInfo->clear();
     foreach (const QCameraViewfinderSettings &ViewSet, ViewSets) {
-        if (ViewSet.pixelFormat() != QVideoFrame::Format_Jpeg) continue;
+        if (ViewSet.pixelFormat() != QVideoFrame::Format_Jpeg)
+            continue;
 
         ui->cameraInfo->addItem(QStringLiteral("rate: %1, resolution: %2x%3")
                                     .arg(ViewSet.maximumFrameRate())

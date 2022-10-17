@@ -167,13 +167,6 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
         return false;
     }
 
-#if 0
-    pAudioCodecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
-    pAudioCodecCtx->codec_id = AV_CODEC_ID_AAC;
-    pAudioCodecCtx->profile = FF_PROFILE_AAC_LOW;
-    pAudioCodecCtx->strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL;
-#endif
-
     pAudioCodecCtx->codec_type = AVMEDIA_TYPE_AUDIO;
 
     pAudioCodecCtx->sample_rate = 16000;

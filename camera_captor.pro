@@ -17,7 +17,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 FFMPEG_ROOT = $$PWD/ffmpeg-n4.4-latest-win64-gpl-shared-4.4
 
-#DEFINES += MAKE_VIDEO=1
+#DEFINES += MAKE_AUDIO=1 MAKE_VIDEO=1
 
 INCLUDEPATH += $$FFMPEG_ROOT/include
 LIBS += -L$$FFMPEG_ROOT/lib -lavutil -lavformat -lavcodec -lavdevice -lavfilter -lswresample -lswscale -lpostproc
@@ -30,6 +30,7 @@ SOURCES += \
     widget.cpp
 
 HEADERS += \
+    AudioQueue.h \
     DataSource.h \
     mp4maker.h \
     mycameracapture.h \
