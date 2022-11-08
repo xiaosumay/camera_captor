@@ -15,17 +15,25 @@
 
 #include "mp4maker.h"
 
+#include "recorder.h"
+
 #if defined(MAKE_AUDIO)
 #include "AudioQueue.h"
 static BufferUnits bufferUnits;
 #endif
 
+Q_LOGGING_CATEGORY(WidgetLog, "aiui.Widget")
+
 Q_DECLARE_METATYPE(QCameraInfo)
+
+static QThreadPool g_mp4_pool;
 
 Widget::Widget(QWidget *parent)
     : QWidget(parent), ui(new Ui::Widget), m_audioInput(Q_NULLPTR), m_mp4Maker(Q_NULLPTR)
 {
     ui->setupUi(this);
+
+    g_mp4_pool.setMaxThreadCount(1);
 
 #if defined(MAKE_AUDIO)
     reset_buffer(&bufferUnits);
@@ -38,8 +46,8 @@ Widget::Widget(QWidget *parent)
 
     const QList<QAudioDeviceInfo> availableAudios = QAudioDeviceInfo::availableDevices(
         QAudio::AudioInput);
-    for (const QAudioDeviceInfo &audioInfo : availableAudios) {
-        ui->audioList->addItem(audioInfo.deviceName(), QVariant::fromValue(audioInfo));
+    for (const auto &deviceName : AudioCaptor::getDevices()) {
+        ui->audioList->addItem(QString::fromStdString(deviceName));
     }
 
     connect(ui->camraList, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
@@ -58,9 +66,10 @@ Widget::Widget(QWidget *parent)
 
     dataSource = new DataSource(this);
     connect(dataSource, &DataSource::capture, this, &Widget::onCapture);
-    connect(dataSource, &DataSource::audioAvailable, this, &Widget::onAudioAvailable);
+    connect(dataSource, &DataSource::audioAvailable, this, &Widget::onAudioAvailable,
+            Qt::QueuedConnection);
 
-    dataSource->open(QIODevice::WriteOnly);
+    //dataSource->open(QIODevice::WriteOnly);
     dataSource->setSeries(series);
 
     QChart *chart = new QChart();
@@ -90,25 +99,31 @@ void Widget::onCapture()
 
 void Widget::onAudioAvailable(QByteArray audio)
 {
-    if (!m_mp4Maker)
+    if (!send2Mp4)
         return;
 
     QImage img = viewfinder->getImage();
-    m_mp4Maker->addImage(img);
 
 #if defined(MAKE_AUDIO)
-    static QByteArray block(2048, '\0');
-    int actual = 0;
+    QtConcurrent::run(&g_mp4_pool, [this, img, audio]() {
+        m_mp4Maker->addImage(img);
 
-    write_loop_data(&bufferUnits, audio.data(), audio.size());
-    while (read_loop_data(&bufferUnits, block.data(), block.size(), &actual) != -1) {
-        m_mp4Maker->addAudio(block);
-    }
+        static QByteArray block(2048, '\0');
+        int actual = 0;
+
+        write_loop_data(&bufferUnits, audio.data(), audio.size());
+        while (read_loop_data(&bufferUnits, block.data(), block.size(), &actual) != -1) {
+            m_mp4Maker->addAudio(block);
+        }
+    });
+#else
+    QtConcurrent::run(&g_mp4_pool, m_mp4Maker.get(), &Mp4Maker::addImage, img);
 #endif
 }
 
 void Widget::onAudioInfoChanged(int idx)
 {
+#if 0
     const QAudioDeviceInfo &info = ui->audioList->itemData(idx).value<QAudioDeviceInfo>();
 
     qDebug() << "audio info: " << info.deviceName();
@@ -117,6 +132,12 @@ void Widget::onAudioInfoChanged(int idx)
     foreach (auto item, info.supportedChannelCounts()) {
         ui->channelList->addItem(QString::number(item));
     }
+#else
+    ui->channelList->clear();
+    for (auto item : QList<int>{1, 2, 4, 6, 8, 10, 16, 32}) {
+        ui->channelList->addItem(QString::number(item));
+    }
+#endif
 }
 
 void Widget::onCameraInfoChanged(int idx)
@@ -155,13 +176,15 @@ void Widget::setCamera(const QCameraInfo &cameraInfo)
                                 QVariant::fromValue(ViewSet));
     }
 
+    viewfinder->setupRate(ViewSets[0].maximumFrameRate());
+
     m_camera->setViewfinderSettings(ViewSets[0]);
 }
 
 void Widget::setAudio(const QAudioDeviceInfo &audioInfo)
 {
     int channels = ui->channelList->currentText().toInt();
-
+#if 0
     QAudioFormat formatAudio;
     formatAudio.setSampleRate(16000);
     formatAudio.setChannelCount(channels);
@@ -178,6 +201,17 @@ void Widget::setAudio(const QAudioDeviceInfo &audioInfo)
     dataSource->setChannelCount(formatAudio.channelCount());
 
     m_audioInput.reset(audioInput);
+#endif
+    try {
+        dataSource->setChannelCount(channels);
+
+        AudioCaptor *ac = new AudioCaptor(ui->audioList->currentText().toStdString(), dataSource);
+
+        m_audioInput.reset(ac);
+    } catch (std::invalid_argument &ec) {
+        m_audioInput.reset(NULL);
+        qDebug() << "AudioCaptor: " << QString::fromLatin1(ec.what());
+    }
 }
 
 void Widget::on_start_record_clicked()
@@ -194,15 +228,14 @@ void Widget::on_start_record_clicked()
     QCameraViewfinderSettings vs = videoInfo.value<QCameraViewfinderSettings>();
 
 #if defined(MAKE_VIDEO)
-
-    qDebug() << "MAKE_VIDEO";
-
-    m_mp4Maker.reset(new Mp4Maker());
+    m_mp4Maker.reset(new Mp4Maker("qsv"));
+    send2Mp4 = true;
 
     m_mp4Maker->init(vs.resolution(), dataSource->getPath() + "/video.mp4");
 #endif
 
-    m_audioInput->start(dataSource);
+    if (m_audioInput)
+        m_audioInput->start();
 }
 
 void Widget::on_stop_record_clicked()
@@ -214,8 +247,10 @@ void Widget::on_stop_record_clicked()
 
         ui->start_record->setEnabled(true);
 
-        m_audioInput->stop();
+        m_audioInput.reset(Q_NULLPTR);
 
+        send2Mp4 = false;
+        g_mp4_pool.waitForDone();
         m_mp4Maker.reset(Q_NULLPTR);
 
         dataSource->waitForFinished();

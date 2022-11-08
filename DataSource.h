@@ -12,13 +12,15 @@
 
 #include <tuple>
 
+#include "recorder.h"
+
 QT_BEGIN_NAMESPACE
 class QQuickView;
 QT_END_NAMESPACE
 
 QT_CHARTS_USE_NAMESPACE
 
-class DataSource : public QIODevice
+class DataSource : public QObject, public AudioListener
 {
     Q_OBJECT
 public:
@@ -38,6 +40,9 @@ signals:
     void capture();
     void audioAvailable(QByteArray);
 
+public slots:
+    void writeData2(QByteArray);
+
 protected:
     qint64 readData(char *data, qint64 maxSize);
     qint64 writeData(const char *data, qint64 maxSize);
@@ -55,7 +60,14 @@ private:
     QList<std::tuple<int, QString, QImage>> imageQueue;
     QMutex imageQueueMutex;
     std::atomic_bool m_running;
-};
 
+    // AudioListener interface
+public:
+    void onAudio(const char *data, int len);
+    int channelCount() const { return m_channels; }
+    int sampleSize() const { return 2; }
+    int framesPerBuffer() const { return 640; }
+    void onInit() {}
+};
 
 #endif // DATASOURCE_H

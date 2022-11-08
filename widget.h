@@ -17,6 +17,7 @@ QT_END_NAMESPACE
 class DataSource;
 class MyCameraCapture;
 class Mp4Maker;
+class AudioCaptor;
 
 class Widget : public QWidget
 {
@@ -46,9 +47,14 @@ private:
     Ui::Widget *ui;
     MyCameraCapture *viewfinder;
     QScopedPointer<QCamera> m_camera;
+#if 0
     QScopedPointer<QMediaRecorder> m_mediaRecorder;
     QScopedPointer<QAudioInput> m_audioInput;
+#else
+    QSharedPointer<AudioCaptor> m_audioInput;
+#endif
     DataSource *dataSource;
     QScopedPointer<Mp4Maker> m_mp4Maker;
+    bool send2Mp4 = false;
 };
 #endif // WIDGET_H

@@ -15,10 +15,12 @@ class Mp4Maker : public QObject
 {
     Q_OBJECT
 public:
-    explicit Mp4Maker(QObject *parent = nullptr);
+    explicit Mp4Maker(QString hwdevice, QObject *parent = nullptr);
     ~Mp4Maker();
 
     bool init(const QSize &size, const QString &save_path);
+
+    static QStringList get_vdec_support_hwdevices();
 
 public slots:
     void addAudio(QByteArray audio);
@@ -26,6 +28,7 @@ public slots:
 
 private:
     bool m_unit_started = false;
+    QString m_hwdevice;
 
     AVFormatContext *pFormatCtx = NULL;
 

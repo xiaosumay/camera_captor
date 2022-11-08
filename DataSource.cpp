@@ -17,11 +17,7 @@ Q_DECLARE_METATYPE(QAbstractAxis *)
 
 static QThreadPool g_pool;
 
-DataSource::DataSource(QObject *parent)
-    : QIODevice(parent)
-    , m_channels(1)
-    , m_id(0)
-    , m_running(true)
+DataSource::DataSource(QObject *parent) : QObject(parent), m_channels(1), m_id(0), m_running(true)
 {
     qRegisterMetaType<QAbstractSeries *>();
     qRegisterMetaType<QAbstractAxis *>();
@@ -32,6 +28,11 @@ DataSource::DataSource(QObject *parent)
 DataSource::~DataSource()
 {
     waitForFinished();
+}
+
+void DataSource::writeData2(QByteArray data)
+{
+    writeData(data.constData(), data.length());
 }
 
 qint64 DataSource::readData(char *data, qint64 maxSize)
@@ -82,7 +83,7 @@ qint64 DataSource::writeData(const char *data, qint64 maxSize)
 
     } else {
         QByteArray buff(maxSize / m_channels, Qt::Uninitialized);
-        for (int i = 0; i < 640; ++i) {
+        for (int i = 0; i < (maxSize / (m_channels * sizeof(short))); ++i) {
             memcpy(buff.data() + sizeof(short) * i, data + sizeof(short) * i * m_channels, sizeof(short));
         }
 
@@ -131,6 +132,12 @@ void DataSource::runnThread()
 
         } while (ret == 0);
     }
+}
+
+void DataSource::onAudio(const char *data, int len)
+{
+    QByteArray qData = QByteArray(data, len);
+    QMetaObject::invokeMethod(this, "writeData2", Qt::QueuedConnection, Q_ARG(QByteArray, qData));
 }
 
 void DataSource::setSeries(QAbstractSeries *series)

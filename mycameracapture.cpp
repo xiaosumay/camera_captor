@@ -11,7 +11,6 @@ QImage QVideoFrameToQImage(const QVideoFrame &videoFrame)
     if (videoFrame.handleType() == QAbstractVideoBuffer::NoHandle) {
         QImage image = qt_imageFromVideoFrame(videoFrame);
         if (image.isNull()) { return QImage(); }
-
         if (image.format() != QImage::Format_ARGB32) { image = image.convertToFormat(QImage::Format_ARGB32); }
 
         return image;
@@ -79,6 +78,28 @@ QList<QVideoFrame::PixelFormat> MyCameraCapture::supportedPixelFormats(QAbstract
            << QVideoFrame::Format_CameraRaw << QVideoFrame::Format_AdobeDng;
 }
 
+bool MyCameraCapture::getClock()
+{
+    static int i = 6;
+
+    if (m_rate < 10)
+        return true;
+
+    if (i-- == 0) {
+        if (m_rate >= 30)
+            i = 6;
+        else if (m_rate >= 25)
+            i = 5;
+        else if (m_rate >= 10) {
+            i = 2;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 bool MyCameraCapture::present(const QVideoFrame &frame)
 {
     if (frame.isValid()) {
@@ -87,7 +108,7 @@ bool MyCameraCapture::present(const QVideoFrame &frame)
         {
             QMutexLocker l(&m_locker);
 
-            m_image << QVideoFrameToQImage(cloneFrame);
+            m_image << QVideoFrameToQImage(cloneFrame) /*.mirrored(true, false)*/;
 #if 0
             QImage::Format imageFormat = QVideoFrame::imageFormatFromPixelFormat(frame.pixelFormat());
 
@@ -103,10 +124,11 @@ bool MyCameraCapture::present(const QVideoFrame &frame)
 
         cloneFrame.unmap();
 
-        m_label->setPixmap(QPixmap::fromImage(m_image.first()).scaled(m_label->size(), Qt::KeepAspectRatio));
-
-        return true;
+        if (getClock()) {
+            m_label->setPixmap(
+                QPixmap::fromImage(m_image.first()).scaled(m_label->size(), Qt::KeepAspectRatio));
+        }
     }
 
-    return false;
+    return true;
 }
