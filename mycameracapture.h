@@ -1,19 +1,24 @@
 #ifndef MYCAMERACAPTURE_H
 #define MYCAMERACAPTURE_H
 
-#include <QLabel>
+#include <QOpenGLWidget>
 #include <QAbstractVideoSurface>
 #include <QMutex>
 #include <QQueue>
+
+QImage QVideoFrameToQImage(const QVideoFrame &videoFrame);
 
 class MyCameraCapture : public QAbstractVideoSurface
 {
     Q_OBJECT
 public:
-    MyCameraCapture(QLabel *widget, QObject *parent = nullptr);
+    MyCameraCapture(QWidget *parent = nullptr);
 
-    QImage getImage();
+    QVideoFrame getImage();
     void setupRate(int rate) { m_rate = rate; }
+
+signals:
+    void showCameraFrame(QVideoFrame);
 
 public:
     QList<QVideoFrame::PixelFormat> supportedPixelFormats(QAbstractVideoBuffer::HandleType type) const;
@@ -23,9 +28,8 @@ private:
     bool getClock();
 
 private:
-    QQueue<QImage> m_image;
+    QQueue<QVideoFrame> m_image;
     QMutex mutable m_locker;
-    QLabel *m_label;
     int m_rate = 0;
 };
 

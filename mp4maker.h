@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVideoFrame>
 
 struct AVCodecContext;
 struct AVFormatContext;
@@ -24,7 +25,7 @@ public:
 
 public slots:
     void addAudio(QByteArray audio);
-    void addImage(const QImage &img);
+    void addImage(const QVideoFrame &frame);
 
 private:
     bool m_unit_started = false;

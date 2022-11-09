@@ -31,6 +31,7 @@ SOURCES += \
     main.cpp \
     mp4maker.cpp \
     mycameracapture.cpp \
+    myopenglwidget.cpp \
     recorder.cpp \
     widget.cpp
 
@@ -40,6 +41,7 @@ HEADERS += \
     common.h \
     mp4maker.h \
     mycameracapture.h \
+    myopenglwidget.h \
     recorder.h \
     widget.h
 

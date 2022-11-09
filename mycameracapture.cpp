@@ -6,12 +6,15 @@
 #include <QOpenGLFunctions>
 #include "private/qvideoframe_p.h"
 
+#include <QtConcurrent>
+
 QImage QVideoFrameToQImage(const QVideoFrame &videoFrame)
 {
     if (videoFrame.handleType() == QAbstractVideoBuffer::NoHandle) {
         QImage image = qt_imageFromVideoFrame(videoFrame);
-        if (image.isNull()) { return QImage(); }
-        if (image.format() != QImage::Format_ARGB32) { image = image.convertToFormat(QImage::Format_ARGB32); }
+        if (image.isNull()) {
+            return QImage();
+        }
 
         return image;
     }
@@ -40,16 +43,11 @@ QImage QVideoFrameToQImage(const QVideoFrame &videoFrame)
     return QImage();
 }
 
-MyCameraCapture::MyCameraCapture(QLabel *widget, QObject *parent)
-    : QAbstractVideoSurface(parent)
-    , m_image()
-    , m_label(widget)
-{
-}
+MyCameraCapture::MyCameraCapture(QWidget *parent) : QAbstractVideoSurface(parent), m_image() {}
 
-QImage MyCameraCapture::getImage()
+QVideoFrame MyCameraCapture::getImage()
 {
-    static QImage image;
+    static QVideoFrame image;
 
     QMutexLocker l(&m_locker);
 
@@ -103,30 +101,18 @@ bool MyCameraCapture::getClock()
 bool MyCameraCapture::present(const QVideoFrame &frame)
 {
     if (frame.isValid()) {
-        QVideoFrame cloneFrame(frame);
-        cloneFrame.map(QAbstractVideoBuffer::ReadOnly);
         {
             QMutexLocker l(&m_locker);
 
-            m_image << QVideoFrameToQImage(cloneFrame) /*.mirrored(true, false)*/;
-#if 0
-            QImage::Format imageFormat = QVideoFrame::imageFormatFromPixelFormat(frame.pixelFormat());
+            m_image << QVideoFrame(frame);
 
-            if (imageFormat != QImage::Format_Invalid) {
-                m_image << QImage(cloneFrame.bits(), cloneFrame.width(), cloneFrame.height(), imageFormat);
-            } else {
-                int nbytes = frame.mappedBytes();
-                m_image << QImage::fromData(frame.bits(), nbytes);
+            if (m_image.size() > 5) {
+                m_image.pop_front();
             }
-#endif
-            if (m_image.size() > 5) { m_image.pop_front(); }
         }
 
-        cloneFrame.unmap();
-
         if (getClock()) {
-            m_label->setPixmap(
-                QPixmap::fromImage(m_image.first()).scaled(m_label->size(), Qt::KeepAspectRatio));
+            emit showCameraFrame(frame);
         }
     }
 

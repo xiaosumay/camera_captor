@@ -7,7 +7,7 @@
 #include <QtConcurrent>
 #include <QThreadPool>
 #include <QAudioInput>
-
+#include <QtConcurrent>
 #include <QtCharts/QtCharts>
 
 #include "DataSource.h"
@@ -57,7 +57,10 @@ Widget::Widget(QWidget *parent)
     connect(ui->cameraInfo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
             &Widget::onCameraSettingChanged);
 
-    viewfinder = new MyCameraCapture(ui->cameraView, this);
+    viewfinder = new MyCameraCapture(this);
+
+    connect(viewfinder, &MyCameraCapture::showCameraFrame, ui->cameraView,
+            &MyOpenGLWidget::showCameraFrameSlot);
 
     setCamera(QCameraInfo::defaultCamera());
 
@@ -102,7 +105,7 @@ void Widget::onAudioAvailable(QByteArray audio)
     if (!send2Mp4)
         return;
 
-    QImage img = viewfinder->getImage();
+    QVideoFrame img = viewfinder->getImage();
 
 #if defined(MAKE_AUDIO)
     QtConcurrent::run(&g_mp4_pool, [this, img, audio]() {
@@ -156,6 +159,78 @@ void Widget::onCameraSettingChanged(int idx)
         m_camera->setViewfinderSettings(info.value<QCameraViewfinderSettings>());
 }
 
+static QString PixelFormatStr(QVideoFrame::PixelFormat format)
+{
+    switch (format) {
+    case QVideoFrame::Format_ARGB32:
+        return QStringLiteral("ARGB32");
+    case QVideoFrame::Format_ARGB32_Premultiplied:
+        return QStringLiteral("ARGB32_Premultiplied");
+    case QVideoFrame::Format_RGB32:
+        return QStringLiteral("RGB32");
+    case QVideoFrame::Format_RGB24:
+        return QStringLiteral("RGB24");
+    case QVideoFrame::Format_RGB565:
+        return QStringLiteral("RGB565");
+    case QVideoFrame::Format_RGB555:
+        return QStringLiteral("RGB555");
+    case QVideoFrame::Format_ARGB8565_Premultiplied:
+        return QStringLiteral("ARGB8565_Premultiplied");
+    case QVideoFrame::Format_BGRA32:
+        return QStringLiteral("BGRA32");
+    case QVideoFrame::Format_BGRA32_Premultiplied:
+        return QStringLiteral("BGRA32_Premultiplied");
+    case QVideoFrame::Format_BGR32:
+        return QStringLiteral("BGR32");
+    case QVideoFrame::Format_BGR24:
+        return QStringLiteral("BGR24");
+    case QVideoFrame::Format_BGR565:
+        return QStringLiteral("BGR565");
+    case QVideoFrame::Format_BGR555:
+        return QStringLiteral("BGR555");
+    case QVideoFrame::Format_BGRA5658_Premultiplied:
+        return QStringLiteral("BGRA5658_Premultiplied");
+    case QVideoFrame::Format_AYUV444:
+        return QStringLiteral("AYUV444");
+    case QVideoFrame::Format_AYUV444_Premultiplied:
+        return QStringLiteral("AYUV444_Premultiplied");
+    case QVideoFrame::Format_YUV444:
+        return QStringLiteral("YUV444");
+    case QVideoFrame::Format_YUV420P:
+        return QStringLiteral("YUV420P");
+    case QVideoFrame::Format_YV12:
+        return QStringLiteral("YV12");
+    case QVideoFrame::Format_UYVY:
+        return QStringLiteral("UYVY");
+    case QVideoFrame::Format_YUYV:
+        return QStringLiteral("YUYV");
+    case QVideoFrame::Format_NV12:
+        return QStringLiteral("NV12");
+    case QVideoFrame::Format_NV21:
+        return QStringLiteral("NV21");
+    case QVideoFrame::Format_IMC1:
+        return QStringLiteral("IMC1");
+    case QVideoFrame::Format_IMC2:
+        return QStringLiteral("IMC2");
+    case QVideoFrame::Format_IMC3:
+        return QStringLiteral("IMC3");
+    case QVideoFrame::Format_IMC4:
+        return QStringLiteral("IMC4");
+    case QVideoFrame::Format_Y8:
+        return QStringLiteral("Y8");
+    case QVideoFrame::Format_Y16:
+        return QStringLiteral("Y16");
+    case QVideoFrame::Format_Jpeg:
+        return QStringLiteral("Jpeg");
+    case QVideoFrame::Format_CameraRaw:
+        return QStringLiteral("CameraRaw");
+    case QVideoFrame::Format_AdobeDng:
+        return QStringLiteral("AdobeDng");
+    default:
+        return QStringLiteral("Invalid");
+    }
+}
+
 void Widget::setCamera(const QCameraInfo &cameraInfo)
 {
     m_camera.reset(new QCamera(cameraInfo));
@@ -166,13 +241,15 @@ void Widget::setCamera(const QCameraInfo &cameraInfo)
 
     ui->cameraInfo->clear();
     foreach (const QCameraViewfinderSettings &ViewSet, ViewSets) {
+#if 1
         if (ViewSet.pixelFormat() != QVideoFrame::Format_Jpeg)
             continue;
-
-        ui->cameraInfo->addItem(QStringLiteral("rate: %1, resolution: %2x%3")
+#endif
+        ui->cameraInfo->addItem(QStringLiteral("rate: %1, resolution: %2x%3, f: %4")
                                     .arg(ViewSet.maximumFrameRate())
                                     .arg(ViewSet.resolution().width())
-                                    .arg(ViewSet.resolution().height()),
+                                    .arg(ViewSet.resolution().height())
+                                    .arg(PixelFormatStr(ViewSet.pixelFormat())),
                                 QVariant::fromValue(ViewSet));
     }
 
@@ -220,6 +297,7 @@ void Widget::on_start_record_clicked()
     ui->camraList->setEnabled(false);
     ui->channelList->setEnabled(false);
     ui->start_record->setEnabled(false);
+    ui->cameraInfo->setEnabled(false);
 
     auto audioinfo = ui->audioList->currentData();
     setAudio(audioinfo.value<QAudioDeviceInfo>());
@@ -241,18 +319,31 @@ void Widget::on_start_record_clicked()
 void Widget::on_stop_record_clicked()
 {
     if (m_audioInput) {
-        ui->audioList->setEnabled(true);
-        ui->channelList->setEnabled(true);
-        ui->camraList->setEnabled(true);
-
-        ui->start_record->setEnabled(true);
-
         m_audioInput.reset(Q_NULLPTR);
 
         send2Mp4 = false;
-        g_mp4_pool.waitForDone();
+
+        QDialog *dlg = new QDialog(this);
+        dlg->setWindowTitle(QStringLiteral("等待完成。。。"));
+        dlg->setWindowFlags((dlg->windowFlags() & ~Qt::WindowCloseButtonHint));
+        dlg->setModal(true);
+        dlg->resize(500, 60);
+
+        QtConcurrent::run([&dlg]() {
+            g_mp4_pool.waitForDone();
+            QMetaObject::invokeMethod(dlg, "done", Q_ARG(int, 0));
+        });
+
+        dlg->exec();
+
         m_mp4Maker.reset(Q_NULLPTR);
 
         dataSource->waitForFinished();
+
+        ui->audioList->setEnabled(true);
+        ui->channelList->setEnabled(true);
+        ui->camraList->setEnabled(true);
+        ui->cameraInfo->setEnabled(true);
+        ui->start_record->setEnabled(true);
     }
 }

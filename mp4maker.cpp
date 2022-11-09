@@ -3,6 +3,7 @@
 #include <QImage>
 #include <QDebug>
 #include <QThread>
+#include <QDateTime>
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,6 +11,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 
 #include <libavformat/avformat.h>
+#include "libavformat/avio.h"
 
 #include <libswresample/swresample.h>
 
@@ -22,32 +24,6 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
-
-static enum AVPixelFormat find_fmt_by_hw_type(const enum AVHWDeviceType type)
-{
-    enum AVPixelFormat fmt;
-    switch (type) {
-    case AV_HWDEVICE_TYPE_VAAPI:
-        fmt = AV_PIX_FMT_VAAPI;
-        break;
-    case AV_HWDEVICE_TYPE_DXVA2:
-        fmt = AV_PIX_FMT_DXVA2_VLD;
-        break;
-    case AV_HWDEVICE_TYPE_D3D11VA:
-        fmt = AV_PIX_FMT_D3D11;
-        break;
-    case AV_HWDEVICE_TYPE_VDPAU:
-        fmt = AV_PIX_FMT_VDPAU;
-        break;
-    case AV_HWDEVICE_TYPE_VIDEOTOOLBOX:
-        fmt = AV_PIX_FMT_VIDEOTOOLBOX;
-        break;
-    default:
-        fmt = AV_PIX_FMT_NONE;
-        break;
-    }
-    return fmt;
-}
 
 QStringList Mp4Maker::get_vdec_support_hwdevices()
 {
@@ -68,13 +44,21 @@ Mp4Maker::Mp4Maker(QString hwdevice, QObject *parent) : QObject(parent), m_hwdev
 Mp4Maker::~Mp4Maker()
 {
     if (pFormatCtx) {
-        // 写入文件尾
-        auto errnum = av_write_trailer(pFormatCtx);
-        if (errnum != 0) { qDebug() << "av_write_trailer failed"; }
-        errnum = avio_closep(&pFormatCtx->pb); // 关闭AVIO流
-        if (errnum != 0) { qDebug() << "avio_close failed"; }
+        if (m_unit_started) {
+            // 写入文件尾
+            auto errnum = av_write_trailer(pFormatCtx);
+            if (errnum != 0) {
+                qDebug() << "av_write_trailer failed";
+            }
+            errnum = avio_closep(&pFormatCtx->pb); // 关闭AVIO流
+            if (errnum != 0) {
+                qDebug() << "avio_close failed";
+            }
 
-        avformat_close_input(&pFormatCtx); // 关闭封装上下文
+            avformat_close_input(&pFormatCtx); // 关闭封装上下文
+        }
+
+        avformat_free_context(pFormatCtx);
     }
 
     // 关闭编码器和清理上下文的所有空间
@@ -117,8 +101,13 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
     }
 
     // h264视频编码器
-    //const AVCodec *vcodec = avcodec_find_encoder_by_name("h264_qsv");
-    const AVCodec *vcodec = avcodec_find_encoder(AVCodecID::AV_CODEC_ID_H264);
+    const AVCodec *vcodec = avcodec_find_encoder_by_name("h264_qsv");
+    //const AVCodec *vcodec = avcodec_find_encoder(AVCodecID::AV_CODEC_ID_H264);
+
+    if (!vcodec) {
+        qDebug() << "avcodec_find_encoder_by_name failed!";
+        return false;
+    }
 
     // 创建编码器上下文
     pVideoCodecCtx = avcodec_alloc_context3(vcodec);
@@ -130,24 +119,30 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
     pVideoCodecCtx->codec_type = AVMEDIA_TYPE_VIDEO;
 
     // 比特率、宽度、高度
-    //pVideoCodecCtx->bit_rate = 1600000;
+    pVideoCodecCtx->bit_rate = size.width() * size.height() * 6;
     pVideoCodecCtx->width = size.width();   // 视频宽度
     pVideoCodecCtx->height = size.height(); // 视频高度
     // 时间基数、帧率
     pVideoCodecCtx->time_base = {1, 25};
     pVideoCodecCtx->framerate = {25, 1};
     // 关键帧间隔
-    pVideoCodecCtx->gop_size = 10;
+    pVideoCodecCtx->gop_size = 6;
     // 不使用b帧
-    pVideoCodecCtx->max_b_frames = 1;
+    pVideoCodecCtx->max_b_frames = 0;
     // 帧、编码格式
-    pVideoCodecCtx->pix_fmt = AVPixelFormat::AV_PIX_FMT_YUV420P;
-    pVideoCodecCtx->codec_id = AVCodecID::AV_CODEC_ID_H264;
+    pVideoCodecCtx->pix_fmt = *vcodec->pix_fmts;
+    pVideoCodecCtx->codec_id = vcodec->id;
     // 预设：快速
 
+    auto *p = vcodec->pix_fmts;
+    while (*p != AV_PIX_FMT_NONE) {
+        qDebug() << "pVideoCodecCtx->pix_fmt: " << *p;
+        p++;
+    }
+
     av_opt_set(pVideoCodecCtx->priv_data, "tune", "zerolatency", NULL);
-    av_opt_set(pVideoCodecCtx->priv_data, "profile", "main", NULL);
-    av_opt_set(pVideoCodecCtx->priv_data, "preset", "medium", NULL);
+    av_opt_set(pVideoCodecCtx->priv_data, "profile", "high", NULL);
+    av_opt_set(pVideoCodecCtx->priv_data, "preset", "slow", NULL);
     av_opt_set(pVideoCodecCtx->priv_data, "qp", "23", AV_OPT_SEARCH_CHILDREN);
     av_opt_set(pVideoCodecCtx->priv_data, "crf", "18", AV_OPT_SEARCH_CHILDREN);
 
@@ -155,7 +150,6 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
     pVideoCodecCtx->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
 
     pVideoCodecCtx->thread_count = QThread::idealThreadCount() / 2;
-    qDebug() << "pVideoCodecCtx->thread_count: " << pVideoCodecCtx->thread_count;
 
 #if 0
     QByteArray hardwareData = m_hwdevice.toUtf8();
@@ -167,7 +161,9 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
 
     errnum = avcodec_open2(pVideoCodecCtx, vcodec, NULL);
     if (errnum < 0) {
-        qDebug() << "avcodec_open2 pVideoCodecCtx failed";
+        char errbuf[1024] = {0};
+        av_strerror(errnum, errbuf, sizeof(errbuf));
+        qDebug() << "avcodec_open2 failed " << errbuf;
         return false;
     }
 
@@ -178,16 +174,16 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
         return false;
     }
 
-    pVideoStream->codec->codec_tag = 0;
     pVideoStream->codecpar->codec_tag = 0;
+
     // 配置视频流的编码参数
     avcodec_parameters_from_context(pVideoStream->codecpar, pVideoCodecCtx);
 
     pSwsCtx = sws_getContext(size.width(), size.height(),
                              AVPixelFormat::AV_PIX_FMT_BGRA, // 输入
                              size.width(), size.height(),
-                             AVPixelFormat::AV_PIX_FMT_YUV420P, // 输出
-                             SWS_BICUBIC,                       // 算法
+                             pVideoCodecCtx->pix_fmt, // 输出
+                             SWS_BICUBIC,             // 算法
                              0, 0, 0);
 
     if (!pSwsCtx) {
@@ -197,7 +193,7 @@ bool Mp4Maker::init(const QSize &size, const QString &save_path)
 
     // 编码阶段的视频帧结构
     vframe = av_frame_alloc();
-    vframe->format = AVPixelFormat::AV_PIX_FMT_YUV420P;
+    vframe->format = pVideoCodecCtx->pix_fmt;
     vframe->width = size.width();
     vframe->height = size.height();
     vframe->pts = 0;
@@ -373,19 +369,27 @@ void Mp4Maker::addAudio(QByteArray audio)
 #endif
 }
 
-void Mp4Maker::addImage(const QImage &img)
-{
-    if (!m_unit_started) return;
+extern QImage QVideoFrameToQImage(const QVideoFrame &videoFrame);
 
-    char errbuf[1024] = {0};
+void Mp4Maker::addImage(const QVideoFrame &frame)
+{
+    if (!m_unit_started)
+        return;
+
+#if 0
+    qint64 start = QDateTime::currentMSecsSinceEpoch();
+#endif
+
     int errnum = 0;
+
+    QImage img = QVideoFrameToQImage(frame);
 
     // 视频编码
     const uchar *rgb = img.bits();
 
     // 固定写法：配置1帧原始视频画面的数据结构通常为RGBA的形式
     uint8_t *srcSlice[AV_NUM_DATA_POINTERS] = {0};
-    srcSlice[0] = (uint8_t *) rgb;
+    srcSlice[0] = (uint8_t *)rgb;
     int srcStride[AV_NUM_DATA_POINTERS] = {0};
     srcStride[0] = img.width() * 4;
 
@@ -395,22 +399,22 @@ void Mp4Maker::addImage(const QImage &img)
         qDebug() << "image: sws_scale failed";
         return;
     }
+
     // pts递增
     vframe->pts = vpts++;
 
     errnum = avcodec_send_frame(pVideoCodecCtx, vframe);
     if (errnum < 0) {
-        av_strerror(errnum, errbuf, sizeof(errbuf));
-        qDebug() << "image: avcodec_send_frame failed " << errbuf;
         return;
     }
 
-    // 视频编码报文
-    AVPacket *vpkt = av_packet_alloc();
-
     while (true) {
+        // 视频编码报文
+        AVPacket *vpkt = av_packet_alloc();
+
         errnum = avcodec_receive_packet(pVideoCodecCtx, vpkt);
         if (errnum == AVERROR(EAGAIN) || errnum == AVERROR_EOF) {
+            av_packet_unref(vpkt);
             break;
         }
 
@@ -422,11 +426,12 @@ void Mp4Maker::addImage(const QImage &img)
         errnum = av_interleaved_write_frame(pFormatCtx, vpkt);
 
         if (errnum < 0) {
-            av_strerror(errnum, errbuf, sizeof(errbuf));
-            qDebug() << "image: av_interleaved_write_frame failed " << errbuf;
             break;
         }
     }
 
-    av_packet_unref(vpkt);
+#if 0
+    qint64 stop = QDateTime::currentMSecsSinceEpoch();
+    qDebug("sppend: %lld ms", stop - start);
+#endif
 }

@@ -17,16 +17,9 @@
    <item>
     <layout class="QVBoxLayout" name="verticalLayout_3" stretch="3,2">
      <item>
-      <layout class="QHBoxLayout" name="horizontalLayout" stretch="5,2">
+      <layout class="QHBoxLayout" name="horizontalLayout" stretch="2,1">
        <item>
-        <widget class="QLabel" name="cameraView">
-         <property name="text">
-          <string/>
-         </property>
-         <property name="alignment">
-          <set>Qt::AlignCenter</set>
-         </property>
-        </widget>
+        <widget class="MyOpenGLWidget" name="cameraView"/>
        </item>
        <item>
         <layout class="QVBoxLayout" name="verticalLayout_2">
@@ -205,6 +198,11 @@
    <class>QtCharts::QChartView</class>
    <extends>QGraphicsView</extends>
    <header location="global">qchartview.h</header>
+  </customwidget>
+  <customwidget>
+   <class>MyOpenGLWidget</class>
+   <extends>QOpenGLWidget</extends>
+   <header location="global">myopenglwidget.h</header>
   </customwidget>
  </customwidgets>
  <resources/>
